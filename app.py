@@ -39,23 +39,38 @@ input_df = pd.DataFrame([{
     "Embarked_S": embarked_S
 }])
 
-# Load scaler used during training
-scaler_path = "saved_models/scaler.pkl"
-with open(scaler_path, "rb") as f:
-    scaler = pickle.load(f)
+# Load scaler and models with version handling
+try:
+    # Load scaler
+    scaler_path = "saved_models/scaler.pkl"
+    with open(scaler_path, "rb") as f:
+        scaler = pickle.load(f)
+    
+    # Scale the input
+    input_scaled = scaler.transform(input_df)
 
-# Scale the input
-input_scaled = scaler.transform(input_df)
+    # Load models with version check
+    models = {}
+    model_dir = "saved_models"
+    
+    for filename in os.listdir(model_dir):
+        if filename.endswith("_model.pkl"):
+            path = os.path.join(model_dir, filename)
+            with open(path, "rb") as f:
+                model_data = pickle.load(f)
+                
+                # Version compatibility check
+                if hasattr(model_data["best_estimator"], '__sklearn_version__'):
+                    model_version = model_data["best_estimator"].__sklearn_version__
+                    current_version = sklearn.__version__
+                    if model_version != current_version:
+                        st.warning(f"Model {model_data['name']} was trained with scikit-learn {model_version} (current: {current_version})")
+                
+                models[model_data["name"]] = model_data["best_estimator"]
 
-# Load all saved models
-models = {}
-model_dir = "saved_models"
-for filename in os.listdir(model_dir):
-    if filename.endswith("_model.pkl"):
-        path = os.path.join(model_dir, filename)
-        with open(path, "rb") as f:
-            model_data = pickle.load(f)
-            models[model_data["name"]] = model_data["best_estimator"]
+except Exception as e:
+    st.error(f"Error loading models: {str(e)}")
+    st.stop()
 
 # Prediction and display
 if st.button("Predict Survival"):
@@ -68,55 +83,39 @@ if st.button("Predict Survival"):
     with left_col:
         for model_name, model in models.items():
             try:
+                # Get prediction
                 prediction = model.predict(input_scaled)[0]
-
+                
+                # Get probabilities if available
                 if hasattr(model, "predict_proba"):
                     prob = model.predict_proba(input_scaled)[0][1]
                     probabilities.append(prob)
                     labels.append(model_name)
-
-                    if prediction == 1:
-                        st.success(f"✅ {model_name}: Survived (Probability: {prob:.2%})")
-                    else:
-                        st.error(f"❌ {model_name}: Did Not Survive (Probability: {prob:.2%})")
+                    result = f"Probability: {prob:.2%}"
                 else:
-                    if prediction == 1:
-                        st.success(f"✅ {model_name}: Survived (No probability available)")
-                    else:
-                        st.error(f"❌ {model_name}: Did Not Survive (No probability available)")
+                    result = "No probability available"
+                    prob = None
+
+                # Display results
+                if prediction == 1:
+                    st.success(f"✅ {model_name}: Survived ({result})")
+                else:
+                    st.error(f"❌ {model_name}: Did Not Survive ({result})")
 
             except Exception as e:
-                st.warning(f"{model_name} failed to predict: {e}")
+                st.warning(f"⚠️ {model_name} failed: {str(e)}")
 
     with right_col:
         if probabilities:
             mean_prob = np.mean(probabilities)
-            right_col.markdown(
-                f"""
-                <div style='text-align: center; font-size: 28px; font-weight: bold; color: #2c3e50;'>
-                    🔢 Overall Mean<br><span style='font-size: 48px;'>{mean_prob:.2%}</span>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-
-            # 📊 Big bar plot
-            fig, ax = plt.subplots(figsize=(10, 6))  # Bigger figure size
-            bars = ax.barh(labels, probabilities, color='cornflowerblue', edgecolor='black')
-
+            st.metric("Average Survival Chance", f"{mean_prob:.2%}")
+            
+            # Visualization
+            fig, ax = plt.subplots(figsize=(8, 5))
+            ax.barh(labels, probabilities, color='#1f77b4')
             ax.set_xlim(0, 1)
-            ax.set_xlabel("Survival Probability", fontsize=14)
-            ax.set_title("🔍 Survival Probabilities by Model", fontsize=18, weight='bold')
-
-            # Add % labels next to each bar
-            for bar in bars:
-                width = bar.get_width()
-                ax.text(width + 0.02, bar.get_y() + bar.get_height() / 2,
-                        f"{width:.1%}", va='center', fontsize=13)
-
-            ax.tick_params(axis='y', labelsize=12)
-            ax.tick_params(axis='x', labelsize=12)
+            ax.set_xlabel("Survival Probability")
+            ax.set_title("Model Confidence Levels")
             st.pyplot(fig)
-
         else:
-            right_col.info("No probability available to compute average.")
+            st.info("No probabilistic models available for visualization")
